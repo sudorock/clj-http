@@ -12,9 +12,7 @@
 (defn echo-server-handler []
   (proxy [ChannelInboundHandlerAdapter] []
     (channelRead [ctx msg]
-      (.. ctx
-          (write msg)
-          flush))
+      (.. ctx (writeAndFlush msg)))
     (exceptionCaught [ctx cause]
       (do (.printStackTrace cause)
           (.close ctx)))))
