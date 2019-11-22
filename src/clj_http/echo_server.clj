@@ -1,4 +1,4 @@
-(ns clj-http.core
+(ns clj-http.echo-server
   (:import
    [io.netty.buffer ByteBuf]
    [io.netty.channel
@@ -12,7 +12,7 @@
 (defn echo-server-handler []
   (proxy [ChannelInboundHandlerAdapter] []
     (channelRead [ctx msg]
-      (.writeAndFlush ctx msg))
+      (.. ctx (writeAndFlush msg)))
     (exceptionCaught [ctx cause]
       (do (.printStackTrace cause)
           (.close ctx)))))
@@ -43,4 +43,5 @@
                    (.shutdownGracefully worker-group))))))
 
 
-   
+ 
+
