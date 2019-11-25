@@ -7,12 +7,17 @@
    [io.netty.channel.nio NioEventLoopGroup]
    [io.netty.channel.socket SocketChannel]
    [io.netty.channel.socket.nio NioServerSocketChannel]
-   [io.netty.bootstrap ServerBootstrap]))
+   [io.netty.bootstrap ServerBootstrap]
+   [java.nio.charset Charset]))
 
-(defn echo-server-handler []
+(defn parse-http-req [msg]
+  (let [http-string (.toString msg (Charset/forName "UTF-8"))]
+    (println http-string)))
+
+(defn http-req-handler []
   (proxy [ChannelInboundHandlerAdapter] []
     (channelRead [ctx msg]
-      (.writeAndFlush ctx msg))
+      (do (parse-http-req msg)))
     (exceptionCaught [ctx cause]
       (do (.printStackTrace cause)
           (.close ctx)))))
@@ -43,4 +48,4 @@
                    (.shutdownGracefully worker-group))))))
 
 
-   
+
