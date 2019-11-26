@@ -1,14 +1,18 @@
 (ns clj-http.core
   (:import
-   [io.netty.buffer ByteBuf]
-   [io.netty.channel
-    ChannelHandlerContext ChannelInboundHandlerAdapter ChannelFuture
-    ChannelInitializer ChannelHandler ChannelOption EventLoopGroup]
-   [io.netty.channel.nio NioEventLoopGroup]
-   [io.netty.channel.socket SocketChannel]
-   [io.netty.channel.socket.nio NioServerSocketChannel]
-   [io.netty.bootstrap ServerBootstrap]
-   [java.nio.charset Charset]))
+    [io.netty.buffer ByteBuf]
+    [io.netty.channel
+     ChannelHandlerContext ChannelInboundHandlerAdapter ChannelFuture
+     ChannelInitializer ChannelHandler ChannelOption EventLoopGroup]
+    [io.netty.channel.nio NioEventLoopGroup]
+    [io.netty.channel.socket SocketChannel]
+    [io.netty.channel.socket.nio NioServerSocketChannel]
+    [io.netty.bootstrap ServerBootstrap]
+    [java.nio.charset Charset]))
+
+
+(defn create-req-map [s])
+
 
 (defn parse-http-req [msg]
   (let [http-string (.toString msg (Charset/forName "UTF-8"))]
@@ -27,11 +31,11 @@
       (group boss-group worker-group)
       (channel NioServerSocketChannel)
       (childHandler
-       (proxy [ChannelInitializer] []
-         (initChannel [channel]
-           (.. channel
-               (pipeline)
-               (addLast (into-array ChannelHandler [(handler)])))))) 
+        (proxy [ChannelInitializer] []
+          (initChannel [channel]
+            (.. channel
+                (pipeline)
+                (addLast (into-array ChannelHandler [(handler)]))))))
       (option ChannelOption/SO_BACKLOG (int 128))
       (childOption ChannelOption/SO_KEEPALIVE true)))
 
@@ -39,13 +43,10 @@
   (let [boss-group (NioEventLoopGroup.) worker-group (NioEventLoopGroup.)]
     (try
       (let [bootstrap (server-bootstrap boss-group worker-group handler)
-            channel (.. bootstrap (bind port) (sync) (channel))]
+            channel (.. bootstrap (bind port) sync (channel))]
         (-> channel
             .closeFuture
             .sync)
         channel)
       (finally (do (.shutdownGracefully boss-group)
                    (.shutdownGracefully worker-group))))))
-
-
-
