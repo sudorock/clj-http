@@ -34,14 +34,14 @@
     [uri (subs s (+ 3 (count uri)))]
     (throw-error "Invalid version field")))
 
-(defn header-parser [s]
+(defn headers-parser [s]
   (loop [rmn s, key nil, val nil, key? true, res {}]
-    (println rmn)
+    ;(println rmn)
     (cond-let
       (re-find #"^\r\n\r\n" rmn) [(assoc res key val) (subs rmn 4)]
       (re-find #"^\r\n" rmn) (recur (subs rmn 2) nil nil true (assoc res key val))
       [colon (re-find #"^\: (?! +)" rmn)] (recur (subs rmn (count colon)) key val false res)
-      [match (re-find #"(?![\(\)\,\/\:\;<=>\?@\[\]\\\{\}\"])[\x21-\x7E]+" rmn)]
+      [match (re-find #"^(?:(?![\(\)\:\;<=>\?@\[\]\\\{\}\"])[\x21-\x7E ])+" rmn)]
       (if key?
         (recur (subs rmn (count match)) match val key? res)
         (recur (subs rmn (count match)) key match key? res))
@@ -53,15 +53,13 @@
     (throw-error "Invalid Msg body")))
 
 (defn create-req-map [s mthds]
-  (let [[method rmn] (method-parser s mthds), [uri rmn] (uri-parser rmn), [version rmn] (version-parser rmn)
-        [headers rmn] (header-parser rmn)]
-    (println method uri version headers)
+  (let [[method rmn] (method-parser s mthds), [uri rmn] (uri-parser rmn), [version rmn2] (version-parser rmn), [headers rmn] (headers-parser rmn2)]
     (assoc {}
       :request-method method
       :request-uri uri
       :protocol-version version
       :headers headers
-      :request-body (body-parser rmn (headers :Content-Length)))))
+      :request-body (body-parser rmn (Integer/parseInt (headers "Content-Length"))))))
 
 (defn parse-http-req [msg]
   (let [http-string (.toString msg (Charset/forName "UTF-8"))]
@@ -103,6 +101,7 @@
 
 ;; (re-find #"(?![\(\)\,\/\:\;<=>\?@\[\]\\\{\}\"])[\x21-\x7E]+" "(),/:;<=>?@[]{}")
 
+;(re-find #"^(?:(?![\(\)\,\/\:\;<=>\?@\[\]\\\{\}\"])[\x21-\x7E])+" rmn)
 
 ;"Content-Type: text/plain\r
 ;User-Agent: PostmanRuntime/7.20.1\r
@@ -116,3 +115,5 @@
 ;\r
 ;h
 ;c"
+
+;"GET / HTTP/1.1\r\nContent-Type: text/plain\r\nUser-Agent: PostmanRuntime/7.20.1\r\nAccept: */*\r\nCache-Control: no-cache\r\nPostman-Token: ee7685c1-8b93-4cae-b381-c375fc24eca3\r\nHost: localhost\r\nAccept-Encoding: gzip, deflate\r\nContent-Length: 3\r\nConnection: keep-alive\r\n\r\nh\nc"
