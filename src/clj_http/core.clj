@@ -1,6 +1,5 @@
 (ns clj-http.core
   (:import
-    [io.netty.buffer ByteBuf]
     [io.netty.channel
      ChannelHandlerContext ChannelInboundHandlerAdapter ChannelFuture
      ChannelInitializer ChannelHandler ChannelOption EventLoopGroup]
@@ -8,33 +7,33 @@
     [io.netty.channel.socket SocketChannel]
     [io.netty.channel.socket.nio NioServerSocketChannel]
     [io.netty.bootstrap ServerBootstrap]
+    [io.netty.handler.codec.http QueryStringDecoder]
     [java.nio.charset Charset])
   (:require [clojure.string :refer [trim join]]
             [clj-http.helper-macros :refer [cond-let]]))
-
 
 (def http-methods #{"GET" "POST" "HEAD" "OPTIONS" "PUT" "DELETE" "TRACE" "CONNECT"})
 
 (defn throw-error [s] (println s))
 
-(defn method-parser [s mthds]
+(defn read-method [s mthds]
   (if-let [method (re-find #"^\S+" s)]
     (if (contains? mthds method)
       [method (subs s (count method))]
       (throw-error "Invalid Method"))
     (throw-error "Invalid HTTP Request")))
 
-(defn uri-parser [s]
+(defn read-uri [s]
   (if-let [uri (get (re-find #"^ (\S+)" s) 1)]
-    [uri (subs s (inc (count uri)))]
+    [(QueryStringDecoder. uri) (subs s (inc (count uri)))]
     (throw-error "Invalid route field")))
 
-(defn version-parser [s]
+(defn read-version [s]
   (if-let [uri (get (re-find #"^ (\S+)\r\n" s) 1)]
     [uri (subs s (+ 3 (count uri)))]
     (throw-error "Invalid version field")))
 
-(defn headers-parser [s]
+(defn read-headers [s]
   (loop [rmn s, key nil, val nil, key? true, res {}]
     (cond-let
       (re-find #"^\r\n\r\n" rmn) [(assoc res key val) (subs rmn 4)]
@@ -42,37 +41,72 @@
       [colon (re-find #"^\: (?! +)" rmn)] (recur (subs rmn (count colon)) key val false res)
       [match (re-find #"^(?:(?![\(\)\:\;<=>\?@\[\]\\\{\}\"])[\x21-\x7E ])+" rmn)]
       (if key?
-        (recur (subs rmn (count match)) match val key? res)
+        (recur (subs rmn (count match)) (.toLowerCase match) val key? res)
         (recur (subs rmn (count match)) key match key? res))
       :else (throw-error "Invalid HTML message"))))
 
-(defn body-parser [s len]
-  (if (= (count s) len) s
+(defn read-body [s content-length]
+  (if (= (count s) content-length) s
     (throw-error "Invalid Msg body")))
 
-(defn create-req-map [s mthds]
-  (let [[method rmn] (method-parser s mthds), [uri rmn] (uri-parser rmn),
-        [version rmn2] (version-parser rmn), [headers rmn] (headers-parser rmn2)]
+(defn handle-post [request-map])
+(defn handle-head [request-map])
+(defn handle-options [request-map])
+(defn handle-put [request-map])
+(defn handle-delete [request-map])
+(defn handle-trace [request-map])
+(defn handle-connect [request-map])
+
+(defn handle-get [request-map]
+  (let [raw-path (-> request-map :request-uri .path)
+        abs-path (if (= "/" raw-path)
+                   (str "server-files/" "index.html")
+                   (str "server-files/" raw-path))]
+    (slurp abs-path)))
+
+(defn encode-http-request [response-map ctx]
+  (let [bytes (.getBytes response-map)]
+    (do (println response-map)
+        (.writeAndFlush ctx bytes))))
+
+(defn process-http-request [request-map]
+  (if-let [handle-method ({"GET" handle-get
+                           "POST" handle-post
+                           "HEAD" handle-head
+                           "OPTIONS" handle-options
+                           "PUT" handle-put
+                           "DELETE" handle-delete
+                           "TRACE" handle-trace
+                           "CONNECT" handle-connect}
+                          (request-map :request-method))]
+    (handle-method request-map)))
+
+(defn decode-http-request [msg]
+  (let [http-str (.toString msg (Charset/forName "UTF-8"))
+        [method rmn] (read-method http-str http-methods)
+        [uri rmn] (read-uri rmn)
+        [version rmn] (read-version rmn)
+        [headers rmn] (read-headers rmn)
+        body (read-body rmn (Integer/parseInt (headers "content-length")))]
     (assoc {}
       :request-method method
       :request-uri uri
       :protocol-version version
       :headers headers
-      :request-body (body-parser rmn (Integer/parseInt (headers "Content-Length"))))))
+      :request-body body)))
 
-(defn decode-http [msg]
-  (let [http-string (.toString msg (Charset/forName "UTF-8"))]
-    (println (create-req-map http-string http-methods))))
-
-(defn http-request-handler []
+(defn handle-http-request []
   (proxy [ChannelInboundHandlerAdapter] []
     (channelRead [ctx msg]
-      (do (decode-http msg)))
+      (-> msg
+          decode-http-request
+          process-http-request
+          (encode-http-request ctx)))
     (exceptionCaught [ctx cause]
       (do (.printStackTrace cause)
           (.close ctx)))))
 
-(defn server-bootstrap [boss-group worker-group handler]
+(defn bootstrap-server [boss-group worker-group handler]
   (.. (ServerBootstrap.)
       (group boss-group worker-group)
       (channel NioServerSocketChannel)
@@ -88,14 +122,10 @@
 (defn start-server [handler port]
   (let [boss-group (NioEventLoopGroup.) worker-group (NioEventLoopGroup.)]
     (try
-      (let [bootstrap (server-bootstrap boss-group worker-group handler)
+      (let [bootstrap (bootstrap-server boss-group worker-group handler)
             channel (.. bootstrap (bind port) sync (channel))]
-        (-> channel
-            .closeFuture
-            .sync)
-        channel)
-      (finally (do (.shutdownGracefully boss-group)
-                   (.shutdownGracefully worker-group))))))
+        (-> channel .closeFuture .sync) channel)
+      (finally (do (.shutdownGracefully boss-group) (.shutdownGracefully worker-group))))))
 
 
 
