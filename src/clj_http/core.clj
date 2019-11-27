@@ -36,7 +36,6 @@
 
 (defn headers-parser [s]
   (loop [rmn s, key nil, val nil, key? true, res {}]
-    ;(println rmn)
     (cond-let
       (re-find #"^\r\n\r\n" rmn) [(assoc res key val) (subs rmn 4)]
       (re-find #"^\r\n" rmn) (recur (subs rmn 2) nil nil true (assoc res key val))
@@ -48,12 +47,12 @@
       :else (throw-error "Invalid HTML message"))))
 
 (defn body-parser [s len]
-  (if (= (count s) len)
-    s
+  (if (= (count s) len) s
     (throw-error "Invalid Msg body")))
 
 (defn create-req-map [s mthds]
-  (let [[method rmn] (method-parser s mthds), [uri rmn] (uri-parser rmn), [version rmn2] (version-parser rmn), [headers rmn] (headers-parser rmn2)]
+  (let [[method rmn] (method-parser s mthds), [uri rmn] (uri-parser rmn),
+        [version rmn2] (version-parser rmn), [headers rmn] (headers-parser rmn2)]
     (assoc {}
       :request-method method
       :request-uri uri
@@ -61,14 +60,14 @@
       :headers headers
       :request-body (body-parser rmn (Integer/parseInt (headers "Content-Length"))))))
 
-(defn parse-http-req [msg]
+(defn decode-http [msg]
   (let [http-string (.toString msg (Charset/forName "UTF-8"))]
-    (def hs http-string)))
+    (println (create-req-map http-string http-methods))))
 
-(defn http-req-handler []
+(defn http-request-handler []
   (proxy [ChannelInboundHandlerAdapter] []
     (channelRead [ctx msg]
-      (do (parse-http-req msg)))
+      (do (decode-http msg)))
     (exceptionCaught [ctx cause]
       (do (.printStackTrace cause)
           (.close ctx)))))
@@ -97,6 +96,8 @@
         channel)
       (finally (do (.shutdownGracefully boss-group)
                    (.shutdownGracefully worker-group))))))
+
+
 
 
 ;; (re-find #"(?![\(\)\,\/\:\;<=>\?@\[\]\\\{\}\"])[\x21-\x7E]+" "(),/:;<=>?@[]{}")
