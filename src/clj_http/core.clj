@@ -4,6 +4,7 @@
      ChannelHandlerContext ChannelInboundHandlerAdapter ChannelFuture
      ChannelInitializer ChannelHandler ChannelOption EventLoopGroup]
     [io.netty.channel.nio NioEventLoopGroup]
+    [io.netty.buffer Unpooled]
     [io.netty.channel.socket SocketChannel]
     [io.netty.channel.socket.nio NioServerSocketChannel]
     [io.netty.bootstrap ServerBootstrap]
@@ -39,7 +40,7 @@
       (re-find #"^\r\n\r\n" rmn) [(assoc res key val) (subs rmn 4)]
       (re-find #"^\r\n" rmn) (recur (subs rmn 2) nil nil true (assoc res key val))
       [colon (re-find #"^\: (?! +)" rmn)] (recur (subs rmn (count colon)) key val false res)
-      [match (re-find #"^(?:(?![\(\)\:\;<=>\?@\[\]\\\{\}\"])[\x21-\x7E ])+" rmn)]
+      [match (re-find #"^(?:(?![\:])[\x21-\x7E ])+" rmn)]
       (if key?
         (recur (subs rmn (count match)) (.toLowerCase match) val key? res)
         (recur (subs rmn (count match)) key match key? res))
@@ -64,10 +65,9 @@
                    (str "server-files/" raw-path))]
     (slurp abs-path)))
 
-(defn encode-http-request [response-map ctx]
-  (let [bytes (.getBytes response-map)]
-    (do (println response-map)
-        (.writeAndFlush ctx bytes))))
+(defn encode-http-request [response-map ctx msg]
+  (let [bytes (.. Unpooled (copiedBuffer response-map (Charset/forName "UTF-8")))]
+    (.writeAndFlush ctx bytes)))
 
 (defn process-http-request [request-map]
   (if-let [handle-method ({"GET" handle-get
@@ -87,7 +87,9 @@
         [uri rmn] (read-uri rmn)
         [version rmn] (read-version rmn)
         [headers rmn] (read-headers rmn)
-        body (read-body rmn (Integer/parseInt (headers "content-length")))]
+        body (if-let [length (headers "content-length")]
+               (read-body rmn (Integer/parseInt length))
+               nil)]
     (assoc {}
       :request-method method
       :request-uri uri
@@ -101,7 +103,7 @@
       (-> msg
           decode-http-request
           process-http-request
-          (encode-http-request ctx)))
+          (encode-http-request ctx msg)))
     (exceptionCaught [ctx cause]
       (do (.printStackTrace cause)
           (.close ctx)))))
@@ -148,3 +150,11 @@
 ;c"
 
 ;"GET / HTTP/1.1\r\nContent-Type: text/plain\r\nUser-Agent: PostmanRuntime/7.20.1\r\nAccept: */*\r\nCache-Control: no-cache\r\nPostman-Token: ee7685c1-8b93-4cae-b381-c375fc24eca3\r\nHost: localhost\r\nAccept-Encoding: gzip, deflate\r\nContent-Length: 3\r\nConnection: keep-alive\r\n\r\nh\nc"
+
+
+;Host: localhost
+;Connection: keep-alive
+;Pragma: no-cache
+;Cache-Control: no-cache
+;Upgrade-Insecure-Requests: 1
+;User-Agent: Mozilla/5.0 (Macintosh); Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36
