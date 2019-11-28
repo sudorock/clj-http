@@ -11,26 +11,54 @@
     [io.netty.handler.codec.http QueryStringDecoder]
     [java.nio.charset Charset]
     [java.time.format DateTimeFormatter]
-    [java.time ZonedDateTime ZoneOffset])
+    [java.time ZonedDateTime ZoneOffset]
+    [java.io File ByteArrayOutputStream]
+    [java.nio.file Files]
+    [com.google.common.primitives Bytes])
   (:require [clojure.string :refer [trim join]]
             [clj-http.helper-macros :refer [cond-let]]
             [clj-time.format :as f]
-            [clj-time.core :as t]))
-
-(def http-methods #{"GET" "POST" "HEAD" "OPTIONS" "PUT" "DELETE" "TRACE" "CONNECT"})
-
+            [clj-time.core :as t]
+            [pantomime.mime :refer [mime-type-of]]))
 (def ^:private time-format (f/formatter "EEE, dd MMM yyyy HH:mm:ss"))
+(defn- time->str [time] (str (f/unparse time-format time) " GMT"))
 
-(defn- time->str
-  [time]
-  ;; All HTTP timestamps MUST be in GMT and UTC == GMT in this case.
-  (str (f/unparse time-format time) " GMT"))
+(defn deep-merge [a b]
+  (merge-with (fn [x y]
+                (cond (map? y) (deep-merge x y)
+                      (vector? y) (concat x y)
+                      :else y))
+              a b))
+
+(defn handle-post [request-map])
+(defn handle-head [request-map])
+(defn handle-options [request-map])
+(defn handle-put [request-map])
+(defn handle-delete [request-map])
+(defn handle-trace [request-map])
+(defn handle-connect [request-map])
+
+
+
+(defn handle-get [request-map]
+  (try (let [raw-path (-> request-map :request-uri .path)
+             abs-path (if (= "/" raw-path) (str "server-files/" "index.html") (str "server-files/" raw-path))
+             resource (.. Files (readAllBytes (.toPath (File. abs-path))))]
+         {:body resource
+          :headers {"Content-Type" (mime-type-of abs-path)
+                    "Content-Length" (alength resource)}})
+       (catch Exception e {:status-code 404
+                           :reason-phrase "Not Found"})))
+
+(def http-methods {"GET" #(handle-get %) "POST" #(handle-post %) "HEAD" #(handle-head %)
+                   "OPTIONS" #(handle-options %) "PUT" #(handle-put %) "DELETE" #(handle-delete %)
+                   "TRACE" #(handle-trace %) "CONNECT" #(handle-connect %)})
 
 (defn throw-error [s] (println s))
 
-(defn read-method [s mthds]
+(defn read-method [s]
   (if-let [method (re-find #"^\S+" s)]
-    (if (contains? mthds method)
+    (if (contains? (set (keys http-methods)) method)
       [method (subs s (count method))]
       (throw-error "Invalid Method"))
     (throw-error "Invalid HTTP Request")))
@@ -61,40 +89,24 @@
   (if (= (count s) content-length) s
     (throw-error "Invalid Msg body")))
 
-(defn handle-post [request-map])
-(defn handle-head [request-map])
-(defn handle-options [request-map])
-(defn handle-put [request-map])
-(defn handle-delete [request-map])
-(defn handle-trace [request-map])
-(defn handle-connect [request-map])
-
-(defn handle-get [request-map]
-  (let [raw-path (-> request-map :request-uri .path)
-        abs-path (if (= "/" raw-path) (str "server-files/" "index.html") (str "server-files/" raw-path))
-        resource (slurp abs-path)]
-    (assoc {} :protocol-version "HTTP/1.1" :status-code 200 :reason-phrase "OK"
-              :headers {"Server" "Clj-HTTP 0.1", "Date" (time->str (t/now))}
-              :body resource)))
-
-
-(defn encode-http-request [response-map ctx msg]
-  (let [bytes (.. Unpooled (copiedBuffer response-map (Charset/forName "UTF-8")))]
-    (.writeAndFlush ctx bytes)))
+(defn encode-http-request [response-map ctx]
+  (let [status-line (str (response-map :protocol-version) " " (response-map :status-code) " " (response-map :reason-phrase) "\r\n")
+        headers-appended (str (reduce-kv (fn [s k v] (str s k ": " v "\r\n")) status-line (response-map :headers)) "\r\n")
+        s-h-bytes (.getBytes headers-appended (Charset/forName "UTF-8"))
+        concated-bytes (byte-array (mapcat seq [s-h-bytes (response-map :body)]))
+        bytes->byte-buf (.. Unpooled (wrappedBuffer concated-bytes))]
+    (.writeAndFlush ctx bytes->byte-buf)))
 
 (defn process-http-request [request-map]
-  (condp = (request-map :request-method)
-    "GET" (handle-get request-map)
-    "POST" (handle-post request-map)
-    "HEAD" (handle-head request-map)
-    "OPTIONS" (handle-options request-map)
-    "PUT" (handle-put request-map)
-    "DELETE" (handle-delete request-map)
-    "TRACE" (handle-trace request-map)
-    "CONNECT" (handle-connect request-map)))
+  (let [method (request-map :request-method), handler (http-methods method)]
+    (deep-merge {:protocol-version "HTTP/1.1"
+                 :status-code 200
+                 :reason-phrase "OK"
+                 :headers {"Server" "Clj-HTTP 0.1", "Date" (time->str (t/now))}}
+           (handler request-map))))
 
 (defn decode-http-request [msg]
-  (let [http-str (.toString msg (Charset/forName "UTF-8")), [method rmn] (read-method http-str http-methods),
+  (let [http-str (.toString msg (Charset/forName "UTF-8")), [method rmn] (read-method http-str),
         [uri rmn] (read-uri rmn), [version rmn] (read-version rmn), [headers rmn] (read-headers rmn),
         body (if-let [length (headers "content-length")] (read-body rmn (Integer/parseInt length)) nil)]
     (assoc {} :request-method method :request-uri uri :protocol-version version :headers headers :body body)))
@@ -102,7 +114,7 @@
 (defn handle-http-request []
   (proxy [ChannelInboundHandlerAdapter] []
     (channelRead [ctx msg]
-      (-> msg decode-http-request process-http-request (encode-http-request ctx msg)))
+      (-> msg decode-http-request process-http-request (encode-http-request ctx)))
     (exceptionCaught [ctx cause]
       (do (.printStackTrace cause)
           (.close ctx)))))
@@ -166,4 +178,34 @@
  ;(.. ZonedDateTime (now (.UTC ZoneOffset))))
 
 ;(.. DateTimeFormatter (ofPattern "EEE, dd MMM yyyy HH:mm:ss O") (format (.. ZoneOffset (of "+h"))))
+
+;(defn process-http-request [request-map]
+;  (condp = (request-map :request-method)
+;    "GET" (handle-get request-map)
+;    "POST" (handle-post request-map)
+;    "HEAD" (handle-head request-map)
+;    "OPTIONS" (handle-options request-map)
+;    "PUT" (handle-put request-map)
+;    "DELETE" (handle-delete request-map)
+;    "TRACE" (handle-trace request-map)
+;    "CONNECT" (handle-connect request-map)))
+
+;byte[] bFile = Files.readAllBytes(new File(filePath).toPath());
+;//or this
+;byte[] bFile = Files.readAllBytes(Paths.get(filePath));
+
+
+;byte a[];
+;byte b[];
+;
+;ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+;outputStream.write( a);
+;outputStream.write( b);
+;
+;byte c[] = outputStream.toByteArray();
+
+;bytes (.. Unpooled (copiedBuffer body-appended (Charset/forName "UTF-8")))
+
+
+;(.. (ByteArrayOutputStream.) (write s-h-bytes) (write (response-map :body)) (toByteArray))
 
