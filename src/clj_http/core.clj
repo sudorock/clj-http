@@ -9,11 +9,22 @@
     [io.netty.channel.socket.nio NioServerSocketChannel]
     [io.netty.bootstrap ServerBootstrap]
     [io.netty.handler.codec.http QueryStringDecoder]
-    [java.nio.charset Charset])
+    [java.nio.charset Charset]
+    [java.time.format DateTimeFormatter]
+    [java.time ZonedDateTime ZoneOffset])
   (:require [clojure.string :refer [trim join]]
-            [clj-http.helper-macros :refer [cond-let]]))
+            [clj-http.helper-macros :refer [cond-let]]
+            [clj-time.format :as f]
+            [clj-time.core :as t]))
 
 (def http-methods #{"GET" "POST" "HEAD" "OPTIONS" "PUT" "DELETE" "TRACE" "CONNECT"})
+
+(def ^:private time-format (f/formatter "EEE, dd MMM yyyy HH:mm:ss"))
+
+(defn- time->str
+  [time]
+  ;; All HTTP timestamps MUST be in GMT and UTC == GMT in this case.
+  (str (f/unparse time-format time) " GMT"))
 
 (defn throw-error [s] (println s))
 
@@ -60,50 +71,38 @@
 
 (defn handle-get [request-map]
   (let [raw-path (-> request-map :request-uri .path)
-        abs-path (if (= "/" raw-path)
-                   (str "server-files/" "index.html")
-                   (str "server-files/" raw-path))]
-    (slurp abs-path)))
+        abs-path (if (= "/" raw-path) (str "server-files/" "index.html") (str "server-files/" raw-path))
+        resource (slurp abs-path)]
+    (assoc {} :protocol-version "HTTP/1.1" :status-code 200 :reason-phrase "OK"
+              :headers {"Server" "Clj-HTTP 0.1", "Date" (time->str (t/now))}
+              :body resource)))
+
 
 (defn encode-http-request [response-map ctx msg]
   (let [bytes (.. Unpooled (copiedBuffer response-map (Charset/forName "UTF-8")))]
     (.writeAndFlush ctx bytes)))
 
 (defn process-http-request [request-map]
-  (if-let [handle-method ({"GET" handle-get
-                           "POST" handle-post
-                           "HEAD" handle-head
-                           "OPTIONS" handle-options
-                           "PUT" handle-put
-                           "DELETE" handle-delete
-                           "TRACE" handle-trace
-                           "CONNECT" handle-connect}
-                          (request-map :request-method))]
-    (handle-method request-map)))
+  (condp = (request-map :request-method)
+    "GET" (handle-get request-map)
+    "POST" (handle-post request-map)
+    "HEAD" (handle-head request-map)
+    "OPTIONS" (handle-options request-map)
+    "PUT" (handle-put request-map)
+    "DELETE" (handle-delete request-map)
+    "TRACE" (handle-trace request-map)
+    "CONNECT" (handle-connect request-map)))
 
 (defn decode-http-request [msg]
-  (let [http-str (.toString msg (Charset/forName "UTF-8"))
-        [method rmn] (read-method http-str http-methods)
-        [uri rmn] (read-uri rmn)
-        [version rmn] (read-version rmn)
-        [headers rmn] (read-headers rmn)
-        body (if-let [length (headers "content-length")]
-               (read-body rmn (Integer/parseInt length))
-               nil)]
-    (assoc {}
-      :request-method method
-      :request-uri uri
-      :protocol-version version
-      :headers headers
-      :request-body body)))
+  (let [http-str (.toString msg (Charset/forName "UTF-8")), [method rmn] (read-method http-str http-methods),
+        [uri rmn] (read-uri rmn), [version rmn] (read-version rmn), [headers rmn] (read-headers rmn),
+        body (if-let [length (headers "content-length")] (read-body rmn (Integer/parseInt length)) nil)]
+    (assoc {} :request-method method :request-uri uri :protocol-version version :headers headers :body body)))
 
 (defn handle-http-request []
   (proxy [ChannelInboundHandlerAdapter] []
     (channelRead [ctx msg]
-      (-> msg
-          decode-http-request
-          process-http-request
-          (encode-http-request ctx msg)))
+      (-> msg decode-http-request process-http-request (encode-http-request ctx msg)))
     (exceptionCaught [ctx cause]
       (do (.printStackTrace cause)
           (.close ctx)))))
@@ -158,3 +157,13 @@
 ;Cache-Control: no-cache
 ;Upgrade-Insecure-Requests: 1
 ;User-Agent: Mozilla/5.0 (Macintosh); Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36
+
+;DateTimeFormatter formatter = DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss O");
+;System.out.println(formatter.format(ZonedDateTime.now(ZoneOffset.UTC)));
+;
+;(.ofPattern DateTimeFormatter "EEE, dd MMM yyyy HH:mm:ss O")
+
+ ;(.. ZonedDateTime (now (.UTC ZoneOffset))))
+
+;(.. DateTimeFormatter (ofPattern "EEE, dd MMM yyyy HH:mm:ss O") (format (.. ZoneOffset (of "+h"))))
+
