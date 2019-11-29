@@ -13,3 +13,4 @@ pom.xml.asc
 /.idea
 clj-http.iml
 /server-files
+.DS_Store
