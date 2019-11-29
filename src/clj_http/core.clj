@@ -70,14 +70,15 @@
 (defn read-headers [s]
   (loop [rmn s, key nil, val nil, key? true, res {}]
     (cond-let
-      (re-find #"^\r\n\r\n" rmn) [(assoc res key val) (subs rmn 4)]
-      (re-find #"^\r\n" rmn) (recur (subs rmn 2) nil nil true (assoc res key val))
-      [colon (re-find #"^\: (?! +)" rmn)] (recur (subs rmn (count colon)) key val false res)
-      [match (re-find #"^(?:(?![\:])[\x21-\x7E ])+" rmn)]
-      (if key?
-        (recur (subs rmn (count match)) (.toLowerCase match) val key? res)
-        (recur (subs rmn (count match)) key match key? res))
-      :else (throw-error "Invalid HTML message"))))
+      (re-find #"^\r\n" rmn) [(assoc res key val) (subs rmn 2)]
+      [colon (re-find #"^\: (?! +)" rmn)] (recur (subs rmn (count colon)) key nil false res)
+      (true? key?) (if-let [match (re-find #"^(?:(?![\(\)\,\/\:\;<=>\?@\[\]\\\{\}\"])[\x21-\x7E])+" rmn)]
+                     (recur (subs rmn (count match)) (.toLowerCase match) nil false res)
+                     (throw-error "Invalid HTML Header Key"))
+      (false? key?) (if-let [match (re-find #"^(?:[\x21-\x7E ])+\r\n" rmn)]
+                      (recur (subs rmn (count match)) nil nil true (assoc res key (subs match 0 (- (count match) 2))))
+                      (throw-error "Invalid HTML Header Value"))
+      :else (throw-error "Invalid HTML Header"))))
 
 (defn read-body [s content-length]
   (if (= (count s) content-length) s
